@@ -1,4 +1,4 @@
-fastapi
+fastapi[all]
 uvicorn[standard]
 sqlalchemy
 databases[sqlite]
@@ -6,3 +6,6 @@ alembic
 pymysql
 cryptography
 python-multipart
+python-jose[cryptography] 
+passlib[bcrypt]
+moviepy

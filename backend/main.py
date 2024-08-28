@@ -1,56 +1,38 @@
-from fastapi import FastAPI, File, UploadFile, Depends, HTTPException
+from fastapi import FastAPI, Depends, HTTPException, status, File, UploadFile, Request
 from sqlalchemy.orm import Session
+from fastapi.security import OAuth2PasswordRequestForm
+from fastapi.responses import StreamingResponse
+from auth import get_current_user, create_access_token, get_password_hash, verify_password, get_current_active_user
 from db import get_db
 from models import User, Video
 from schemas import UserCreate
-from fastapi.responses import FileResponse
+from moviepy.editor import VideoFileClip
+import shutil
 import os
-
 
 app = FastAPI()
 
-@app.get('/')
-async def root(db: Session = Depends(get_db)):
-    try:
-        videos = db.query(Video).all()
-        
-        if not videos:
-            return {"message": "No videos at all"}
-        
-        video_names = [video.video_name for video in videos]
-        
-        return {"videos": video_names}
+@app.post("/token", response_model=dict)
+async def login_for_access_token(form_data: OAuth2PasswordRequestForm = Depends(), db: Session = Depends(get_db)):
+    user = db.query(User).filter(User.email == form_data.username).first()
+    if not user or not verify_password(form_data.password, user.paswd):
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Incorrect username or password",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+    access_token = create_access_token(data={"sub": user.email})
+    return {"access_token": access_token, "token_type": "bearer"}
 
-    except HTTPException as e:
-        raise e  
-    
-    except Exception as e:
-        
-        print(f"Unexpected error: {e}")
-        raise HTTPException(status_code=500, detail="Internal Server Error")
-
-@app.get('/login')
-async def login(email: str, paswd: str, db: Session = Depends(get_db)):
-    try:
-        user = db.query(User).filter(User.email == email).first()
-        if user and user.paswd==paswd and user.admin==1:
-            return f"{user.name} u logged in as an admin"
-        elif user and user.paswd == paswd:
-            return {"message": "Congrats, logged in!"}
-        else:
-            raise HTTPException(status_code=401, detail="Invalid credentials")
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Internal Server Error: {e}")
-
-
-@app.post('/signup')
-async def signup(user:UserCreate,  db: Session = Depends(get_db)):
+@app.post("/signup", response_model=dict)
+async def signup(user: UserCreate, db: Session = Depends(get_db)):
     db_user = db.query(User).filter(User.email == user.email).first()
     if db_user:
         raise HTTPException(status_code=400, detail="Email already registered")
+    hashed_password = get_password_hash(user.paswd)
     new_user = User(
         email=user.email,
-        paswd=user.paswd,
+        paswd=hashed_password,
         name=user.name,
         admin=user.admin
     )
@@ -59,58 +41,74 @@ async def signup(user:UserCreate,  db: Session = Depends(get_db)):
     db.refresh(new_user)
     return {"message": "User created successfully"}
 
+@app.get("/users/me", response_model=dict)
+async def read_users_me(current_user: User = Depends(get_current_active_user)):
+    return {"email": current_user.email, "name": current_user.name, "admin": current_user.admin}
 
-import os
-
-@app.post('/upload_video')
-async def upload_video(user_email: str, video_name: str, video_file: UploadFile = File(...), db: Session = Depends(get_db)):
-    user = db.query(User).filter(User.email == user_email).first()
-    
-    if not user:
-        raise HTTPException(status_code=404, detail="User not found")
-    
-    if user.admin != 1:
+@app.post("/upload_video", response_model=dict)
+async def upload_video(
+    video_name: str,
+    video_file: UploadFile = File(...),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_active_user)
+):
+    if current_user.role != "admin":
         raise HTTPException(status_code=403, detail="Permission denied: Only admins can upload videos")
-    
+
     video_name_check = db.query(Video).filter(Video.video_name == video_name).first()
-
     if video_name_check:
-        raise HTTPException(status_code=403, detail="Permission denied: a video with same name exists")
+        raise HTTPException(status_code=403, detail="A video with this name already exists")
+
+    file_location = f"videos/{video_name}.mp4"
+    with open(file_location, "wb") as buffer:
+        shutil.copyfileobj(video_file.file, buffer)
+
+    thumbnail_location = f"thumbnails/{video_name}.png"
+    with VideoFileClip(file_location) as clip:
+        clip.save_frame(thumbnail_location, t=1.00)  # Save a frame at 1 second
+
+    new_video = Video(user_email=current_user.email, video_name=video_name, video_file=file_location, thumbnail_file=thumbnail_location)
+    db.add(new_video)
+    db.commit()
+    db.refresh(new_video)
+
+    return {"filename": video_file.filename, "message": "Video uploaded and thumbnail generated successfully"}
+
+@app.get("/stream_video/{video_name}", response_class=StreamingResponse)
+async def stream_video(video_name: str, request: Request, db: Session = Depends(get_db)):
+    video = db.query(Video).filter(Video.video_name == video_name).first()
+    if not video:
+        raise HTTPException(status_code=404, detail="Video not found")
+
+    video_path = video.video_file
+    if not os.path.exists(video_path):
+        raise HTTPException(status_code=404, detail="Video file not found on disk")
+
+    file_size = os.stat(video_path).st_size
+    range_header = request.headers.get('Range', None)
+    if range_header:
+        range_str = range_header.strip().split("=")[-1]
+        range_start, range_end = range_str.split("-")
+        range_start = int(range_start)
+        range_end = int(range_end) if range_end else file_size - 1
     else:
-       
-        file_location = f"videos/{video_name}.mp4"
-        with open(file_location, "wb") as buffer:
-            shutil.copyfileobj(video_file.file, buffer)
+        range_start = 0
+        range_end = file_size - 1
 
-        
-        new_video = Video(user_email=user.email, video_name=video_name, video_file=file_location)
-        db.add(new_video)
-        db.commit()
-        db.refresh(new_video)
+    def iter_file():
+        with open(video_path, "rb") as video_file:
+            video_file.seek(range_start)
+            chunk_size = 1024 * 1024  # 1MB
+            bytes_remaining = range_end - range_start + 1
+            while bytes_remaining > 0:
+                bytes_to_read = min(chunk_size, bytes_remaining)
+                chunk = video_file.read(bytes_to_read)
+                if not chunk:
+                    break
+                yield chunk
+                bytes_remaining -= len(chunk)
 
-        return {"filename": video_file.filename, "message": "Video uploaded successfully"}
-        
-@app.post('/search_videos')
-async def search_videos(video_name: str, db: Session = Depends(get_db)):
-    try:
-        video = db.query(Video).filter(Video.video_name == video_name).first()
-        
-        if not video:
-            raise HTTPException(status_code=404, detail="Video not found")
-
-        video_path = video.video_file
-
-        if not os.path.exists(video_path):
-            raise HTTPException(status_code=404, detail="Video file not found on disk")
-
-        return FileResponse(video_path)
-    
-    except HTTPException as e:
-        raise e 
-    
-    except Exception as e:
-        
-        print(f"Unexpected error: {e}")
-        raise HTTPException(status_code=500, detail="Internal Server Error")
-
-    
+    response = StreamingResponse(iter_file(), media_type="video/mp4")
+    response.headers["Accept-Ranges"] = "bytes"
+    response.headers["Content-Range"] = f"bytes {range_start}-{range_end}/{file_size}"
+    return response
