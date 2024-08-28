@@ -52,15 +52,19 @@ async def upload_video(user_email: str, video_name: str, video_file: UploadFile 
     if user.admin != 1:
         raise HTTPException(status_code=403, detail="Permission denied: Only admins can upload videos")
     
-    contents = await video_file.read()
-    
+    video_name_check = db.query(Video).filter(Video.video_name == video_name).first()
 
-    new_video = Video(user_email=user.email, video_name=video_name, video_file=contents)
-    db.add(new_video)
-    db.commit()
-    db.refresh(new_video)
+    if video_name_check:
+        raise HTTPException(status_code=403, detail="Permission denied: a video with same name exists")
+    else:
+        contents = await video_file.read()
+        
+        new_video = Video(user_email=user.email, video_name=video_name, video_file=contents)
+        db.add(new_video)
+        db.commit()
+        db.refresh(new_video)
 
-    return {"filename": video_file.filename, "message": "Video uploaded successfully"}
-    
+        return {"filename": video_file.filename, "message": "Video uploaded successfully"}
+        
 
    
