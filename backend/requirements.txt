@@ -6,4 +6,3 @@ alembic
 pymysql
 cryptography
 python-multipart
-spacy

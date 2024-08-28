@@ -21,5 +21,4 @@ class Video(Base):
     video_name = Column(String, nullable=False)
     video_file = Column(BLOB)
 
-    # Relationship to access the user who uploaded the video
     uploader = relationship("User", back_populates="videos")

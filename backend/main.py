@@ -77,12 +77,12 @@ async def upload_video(user_email: str, video_name: str, video_file: UploadFile 
     if video_name_check:
         raise HTTPException(status_code=403, detail="Permission denied: a video with same name exists")
     else:
-        # Save the file to the filesystem
+       
         file_location = f"videos/{video_name}.mp4"
         with open(file_location, "wb") as buffer:
             shutil.copyfileobj(video_file.file, buffer)
 
-        # Store the file path in the database
+        
         new_video = Video(user_email=user.email, video_name=video_name, video_file=file_location)
         db.add(new_video)
         db.commit()
@@ -106,10 +106,10 @@ async def search_videos(video_name: str, db: Session = Depends(get_db)):
         return FileResponse(video_path)
     
     except HTTPException as e:
-        raise e  # Re-raise HTTPExceptions to send them as responses
+        raise e 
     
     except Exception as e:
-        # Log the exception if you have a logger, or print it out for now
+        
         print(f"Unexpected error: {e}")
         raise HTTPException(status_code=500, detail="Internal Server Error")
 
