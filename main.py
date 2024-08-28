@@ -1,7 +1,7 @@
-from fastapi import FastAPI, HTTPException, Depends
+from fastapi import FastAPI, File, UploadFile, Depends, HTTPException
 from sqlalchemy.orm import Session
 from db import get_db
-from models import User
+from models import User, Video
 from schemas import UserCreate
 
 
@@ -40,4 +40,27 @@ async def signup(user:UserCreate,  db: Session = Depends(get_db)):
     db.commit()
     db.refresh(new_user)
     return {"message": "User created successfully"}
+
+
+@app.post('/upload_video')
+async def upload_video(user_email: str, video_name: str, video_file: UploadFile = File(...), db: Session = Depends(get_db)):
+    user = db.query(User).filter(User.email == user_email).first()
+    
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+    
+    if user.admin != 1:
+        raise HTTPException(status_code=403, detail="Permission denied: Only admins can upload videos")
+    
+    contents = await video_file.read()
+    
+
+    new_video = Video(user_email=user.email, video_name=video_name, video_file=contents)
+    db.add(new_video)
+    db.commit()
+    db.refresh(new_video)
+
+    return {"filename": video_file.filename, "message": "Video uploaded successfully"}
+    
+
    
